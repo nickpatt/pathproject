@@ -4,9 +4,9 @@ import type { AppSpec } from "./schema";
 const entityFieldSchema = z.object({
   name: z.string(),
   type: z.string(),
-  required: z.boolean().optional(),
-  unique: z.boolean().optional(),
-  description: z.string().optional(),
+  required: z.boolean().nullable().optional(),
+  unique: z.boolean().nullable().optional(),
+  description: z.string().nullable().optional(),
 });
 
 const entitySchema = z.object({
@@ -19,7 +19,7 @@ const relationshipSchema = z.object({
   from_entity: z.string(),
   to_entity: z.string(),
   type: z.enum(["one_to_one", "one_to_many", "many_to_many"]),
-  foreign_key: z.string().optional(),
+  foreign_key: z.string().nullable().optional(),
 });
 
 const permissionSchema = z.object({
@@ -30,8 +30,8 @@ const permissionSchema = z.object({
 
 const workflowStepSchema = z.object({
   action: z.string(),
-  entity: z.string().optional(),
-  conditions: z.array(z.string()).optional(),
+  entity: z.string().nullable().optional(),
+  conditions: z.array(z.string()).nullable().optional(),
 });
 
 const workflowSchema = z.object({
@@ -41,9 +41,9 @@ const workflowSchema = z.object({
 });
 
 const uiSuggestionSchema = z.object({
-  screen: z.string().optional(),
+  screen: z.string().nullable().optional(),
   description: z.string(),
-  components: z.array(z.string()).optional(),
+  components: z.array(z.string()).nullable().optional(),
 });
 
 export const appSpecSchema = z.object({

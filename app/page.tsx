@@ -5,6 +5,9 @@ import type { AppSpec } from "@/lib/schema";
 import type { SpecReview } from "@/lib/schema";
 
 const MAX_INPUT_LENGTH = 12_000;
+const MAX_CODE_FILES = 50;
+const ACCEPT_CODE_FILES = ".ts,.tsx,.js,.jsx,.py,.js,.mjs,.cjs,.json,.md,.sql,.prisma,.graphql";
+
 const PRESETS = {
   "Orders + refunds": `We need to manage orders and refunds. Each order has an id, customer id, total amount, status (pending, paid, shipped, delivered, cancelled), and created date. Customers have id, name, email. A customer can have many orders. Refunds link to an order and have amount, reason, status (pending, approved, rejected), and created date. Only admins can approve refunds; support can create and read refunds. Workflow: when order status becomes "delivered", allow refund request; approval sends notification.`,
   "Support tickets": `Support ticket system. Tickets have: id, subject, description, status (open, in_progress, waiting, resolved, closed), priority (low, medium, high), assignee (user id), created_at, updated_at. Users have id, name, email, role (agent, admin). Agents can create/read/update tickets assigned to them; admins can do everything. Workflow: new ticket → auto-assign to round-robin agent; when status = resolved, trigger customer satisfaction survey.`,
@@ -31,10 +34,11 @@ export default function Home() {
   const [appSpec, setAppSpec] = useState<AppSpec | null>(null);
   const [review, setReview] = useState<SpecReview | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("summary");
-  const [loading, setLoading] = useState<"extract" | "review" | null>(null);
+  const [loading, setLoading] = useState<"extract" | "review" | "code" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAssumptions, setShowAssumptions] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ path: string; content: string }>>([]);
 
   const fetchExtract = useCallback(async () => {
     setError(null);
@@ -90,6 +94,53 @@ export default function Home() {
     }
   }, [requirements, appSpec]);
 
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList?.length) return;
+    const files = Array.from(fileList).slice(0, MAX_CODE_FILES);
+    Promise.all(
+      files.map((file) =>
+        new Promise<{ path: string; content: string }>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve({ path: file.name, content: String(r.result ?? "") });
+          r.onerror = () => reject(new Error(`Could not read ${file.name}`));
+          r.readAsText(file, "utf-8");
+        })
+      )
+    )
+      .then((read) => setUploadedFiles((prev) => [...prev, ...read]))
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to read files"));
+    e.target.value = "";
+  }, []);
+
+  const clearUploadedFiles = useCallback(() => setUploadedFiles([]), []);
+
+  const fetchExtractFromCode = useCallback(async () => {
+    setError(null);
+    setTruncated(false);
+    if (uploadedFiles.length === 0) {
+      setError("Upload one or more code files first.");
+      return;
+    }
+    setLoading("code");
+    try {
+      const res = await fetch("/api/extract-from-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: uploadedFiles }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.detail || "Analyze failed");
+      setAppSpec(data.appSpec);
+      if (data.truncated) setTruncated(true);
+      setActiveTab("summary");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Analyze failed");
+    } finally {
+      setLoading(null);
+    }
+  }, [uploadedFiles]);
+
   const copyJson = useCallback(() => {
     if (!appSpec) return;
     navigator.clipboard.writeText(JSON.stringify(appSpec, null, 2));
@@ -121,7 +172,7 @@ export default function Home() {
     <main className="max-w-4xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-bold text-slate-900">Requirements → AppSpec</h1>
       <p className="text-slate-600 text-sm">
-        Paste business requirements below. Generate a structured AppSpec, then review for QA and clarifying questions.
+        Paste business requirements or upload a codebase. Get a structured AppSpec so Path (or other AI) can improve or extend the app.
       </p>
 
       {/* Presets */}
@@ -172,6 +223,49 @@ export default function Home() {
         >
           {loading === "review" ? "Reviewing…" : "Review Spec"}
         </button>
+      </div>
+
+      {/* Upload codebase */}
+      <div className="border-t border-slate-200 pt-6 mt-6">
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">Or upload a codebase</h2>
+        <p className="text-slate-600 text-sm mb-3">
+          Upload source files (.ts, .tsx, .js, .py, etc.). The app will read them and infer an AppSpec so Path can improve or rebuild the app.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="cursor-pointer px-4 py-2 rounded-lg bg-slate-100 text-slate-800 font-medium hover:bg-slate-200">
+            <input
+              type="file"
+              multiple
+              accept={ACCEPT_CODE_FILES}
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            Choose files
+          </label>
+          {uploadedFiles.length > 0 && (
+            <>
+              <span className="text-sm text-slate-600">{uploadedFiles.length} file(s)</span>
+              <button type="button" onClick={clearUploadedFiles} className="text-sm text-slate-600 hover:underline">
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={fetchExtractFromCode}
+                disabled={!!loading}
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {loading === "code" ? "Analyzing…" : "Analyze codebase"}
+              </button>
+            </>
+          )}
+        </div>
+        {uploadedFiles.length > 0 && (
+          <ul className="mt-2 text-xs text-slate-500 font-mono list-disc list-inside max-h-24 overflow-y-auto">
+            {uploadedFiles.map((f, i) => (
+              <li key={i}>{f.path} ({f.content.length} chars)</li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {truncated && (

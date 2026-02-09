@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { appSpecJsonSchema } from "@/lib/schema";
-import { EXTRACTION_SYSTEM, EXTRACTION_USER_PREFIX } from "@/lib/prompts";
+import { CODE_EXTRACTION_SYSTEM, codeExtractionUserMessage } from "@/lib/prompts";
 import { validateAppSpec } from "@/lib/validators";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MAX_INPUT_LENGTH, MIN_INPUT_LENGTH } from "@/lib/constants";
@@ -21,28 +21,45 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const text: string = typeof body?.text === "string" ? body.text.trim() : "";
+    const files = body?.files as Array<{ path: string; content: string }> | undefined;
 
-    if (!text) {
+    if (!Array.isArray(files) || files.length === 0) {
       return NextResponse.json(
-        { error: "Please provide requirements text (field: text)." },
+        { error: "Please provide an array of files (each with path and content)." },
         { status: 400 }
       );
     }
-    if (text.length < MIN_INPUT_LENGTH) {
+
+    const normalized = files
+      .filter((f: unknown) => f && typeof f === "object" && "path" in f && "content" in f)
+      .map((f: { path: string; content: string }) => ({
+        path: String(f.path),
+        content: String(f.content),
+      }));
+
+    if (normalized.length === 0) {
       return NextResponse.json(
-        { error: `Requirements too short (min ${MIN_INPUT_LENGTH} characters).` },
+        { error: "Each file must have path and content (string)." },
         { status: 400 }
       );
     }
-    const truncated = text.length > MAX_INPUT_LENGTH;
-    const inputText = truncated ? text.slice(0, MAX_INPUT_LENGTH) : text;
+
+    const fullText = codeExtractionUserMessage(normalized);
+    if (fullText.length < MIN_INPUT_LENGTH) {
+      return NextResponse.json(
+        { error: `Total code length too short (min ${MIN_INPUT_LENGTH} characters). Add more files or ensure content is read as text.` },
+        { status: 400 }
+      );
+    }
+
+    const truncated = fullText.length > MAX_INPUT_LENGTH;
+    const inputText = truncated ? fullText.slice(0, MAX_INPUT_LENGTH) : fullText;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-2024-08-06",
       messages: [
-        { role: "system", content: EXTRACTION_SYSTEM },
-        { role: "user", content: EXTRACTION_USER_PREFIX + inputText },
+        { role: "system", content: CODE_EXTRACTION_SYSTEM },
+        { role: "user", content: inputText },
       ],
       response_format: {
         type: "json_schema",
@@ -79,7 +96,7 @@ export async function POST(req: NextRequest) {
       truncated: truncated || undefined,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Extract failed";
+    const message = err instanceof Error ? err.message : "Extract from code failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
